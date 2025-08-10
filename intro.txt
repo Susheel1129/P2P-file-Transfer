@@ -1,0 +1,102 @@
+python3 -m venv myenv
+source myenv/bin/activate
+
+python -m http.server 8080 --directory web/static
+
+python http_server.py 6001
+
+python launch.py 6000
+
+
+given a base connection setup of client and server using quic connection , modify it to write a scribble vedio game code, where server selects 3 words from words.txt and gives chance to one of the client to choose a word and draw the thing.there should  be minimum of 2 clients connected to get the game started and all the players have to click ready to start the game. each client gets the chance in a cyclic way, and each client gets 30 seconds to draw the word,,meanwhile other clients have to send their guesses indefinitly until their guess is correct.use tkinter or any other python 2d interface of your choice .
+
+server.py:
+import asyncio
+import logging
+from aioquic.asyncio import serve
+from aioquic.quic.configuration import QuicConfiguration
+
+# Enable detailed logging
+# logging.basicConfig(level=logging.DEBUG)
+
+async def stream_handler(reader, writer):
+    data = await reader.read(1024)
+    print(f"Server received: {data.decode()}")
+    writer.write(b"Server says: " + data)
+    await writer.drain()
+    writer.close()
+    await writer.wait_closed()
+
+def stream_handler_wrapper(reader, writer):
+    # Schedule the async stream_handler in the event loop
+    asyncio.create_task(stream_handler(reader, writer))
+
+async def main():
+    configuration = QuicConfiguration(
+        alpn_protocols=["echo"],
+        is_client=False,
+    )
+    try:
+        configuration.load_cert_chain("server_cert.pem", "server_key.pem")
+    except FileNotFoundError as e:
+        print(f"Certificate error: {e}")
+        return
+    
+    server = await serve(
+        "0.0.0.0",
+        4433,
+        configuration=configuration,
+        stream_handler=stream_handler_wrapper,  # Use the wrapper
+    )
+    print("Server started on port 4433")
+    await asyncio.Event().wait()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+client.py:
+
+import asyncio
+import logging
+from aioquic.asyncio import connect
+from aioquic.quic.configuration import QuicConfiguration
+
+# logging.basicConfig(level=logging.DEBUG)
+
+async def main():
+    configuration = QuicConfiguration(
+        alpn_protocols=["echo"],
+        is_client=True,
+        server_name="localhost",
+    )
+    try:
+        configuration.load_verify_locations("server_cert.pem")
+    except FileNotFoundError as e:
+        print(f"Certificate error: {e}")
+        return
+    
+    try:
+        async with connect(
+            "localhost",
+            4433,
+            configuration=configuration,
+        ) as protocol:
+            reader, writer = await protocol.create_stream()
+            
+            message = b"Hello, QUIC!"
+            writer.write(message)
+            await writer.drain()
+            print(f"Client sent: {message.decode()}")
+            
+            response = b""
+            while True:
+                chunk = await reader.read(1024)
+                if not chunk:
+                    break
+                response += chunk
+            print(f"Client received: {response.decode()}")
+    except ConnectionError as e:
+        print(f"Connection failed: {e}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
